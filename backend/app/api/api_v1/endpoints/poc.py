@@ -5,7 +5,9 @@ from pydantic import BaseModel
 from backend.app.api import deps
 from backend.app.core.utils import utcnow, new_id, serialize_doc
 from backend.app.db.mongodb import (
-    process_models_col, workflow_templates_col, workflows_col,
+    industries_col, business_segments_col, departments_col,
+    teams_col, process_families_col, process_models_col,
+    workflow_templates_col, workflows_col,
     workflow_versions_col, workflow_runs_col, step_runs_col,
     tasks_col, approvals_col, audit_events_col
 )
@@ -33,259 +35,201 @@ class ApprovalDecisionRequest(BaseModel):
 
 # ── Endpoints ────────────────────────────────────────────
 
+def create_starter_model(model_id, name, description, industries=None, families=None, depts=None):
+    return {
+        "model_id": model_id,
+        "workspace_id": None,
+        "name": name,
+        "description": description,
+        "purpose": description,
+        "source_type": "global",
+        "ownership_scope": "global",
+        "catalogue_status": "published",
+        "publication_status": "published",
+        "version": "1.0",
+        "applicable_industries": industries or [],
+        "applicable_segments": [],
+        "applicable_departments": depts or [],
+        "applicable_teams": [],
+        "applicable_families": families or [],
+        "tags": [name.lower().replace(" ", "-")],
+        "stages": [
+            {"stage_id": "initiation", "name": "Initiation", "sequence": 1},
+            {"stage_id": "processing", "name": "Processing", "sequence": 2},
+            {"stage_id": "completion", "name": "Completion", "sequence": 3},
+        ],
+        "suggested_roles": ["initiator", "reviewer", "approver"],
+        "approval_points": ["final_approval"],
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+        "published_at": utcnow(),
+    }
+
 @router.post("/seed")
 def poc_seed(
     context: dict = Depends(deps.require_admin),
     _ = Depends(deps.require_poc_enabled)
 ):
-    """Seed a sample process model + template for POC testing."""
+    """Seed a comprehensive starter catalogue for POC testing."""
     workspace_id = context["workspace_id"]
+    user_id = context["user"].user_id
 
-    existing = process_models_col.find_one({"model_id": "poc-leave-approval-model", "workspace_id": workspace_id})
-    if existing:
-        return {"message": "Already seeded", "model_id": "poc-leave-approval-model"}
+    # 1. Industries
+    industries = [
+        ("ind-healthcare", "Healthcare"),
+        ("ind-hr", "Human Resources"),
+        ("ind-finance", "Finance"),
+        ("ind-support", "Customer Support"),
+        ("ind-procurement", "Procurement"),
+        ("ind-supply-chain", "Supply Chain"),
+    ]
+    for iid, name in industries:
+        if not industries_col.find_one({"industry_id": iid}):
+            industries_col.insert_one({
+                "industry_id": iid, "name": name, "description": f"{name} industry",
+                "status": "active", "source_type": "global", "visibility": "public",
+                "created_at": utcnow(), "updated_at": utcnow()
+            })
 
-    # Create process model
-    model = {
-        "model_id": "poc-leave-approval-model",
-        "workspace_id": workspace_id,
-        "name": "Leave Approval Process",
-        "description": "Standard leave approval process with manager and HR review.",
-        "purpose": "Manage employee leave requests through structured approval workflow.",
-        "source_type": "global",
-        "ownership_scope": "workspace",
-        "catalogue_status": "published",
-        "publication_status": "published",
-        "version": "1.0",
-        "applicable_industries": ["all"],
-        "applicable_segments": [],
-        "applicable_departments": ["human_resources"],
-        "applicable_teams": [],
-        "applicable_families": ["leave_management"],
-        "tags": ["leave", "approval", "hr", "employee"],
-        "keywords": ["leave request", "vacation", "sick leave", "approval"],
-        "stages": [
-            {"stage_id": "submission", "name": "Submission", "description": "Employee submits leave request", "sequence": 1},
-            {"stage_id": "review", "name": "Review", "description": "Manager and HR review the request", "sequence": 2},
-            {"stage_id": "completion", "name": "Completion", "description": "Final notification and completion", "sequence": 3},
-        ],
-        "suggested_roles": ["employee", "manager", "hr_admin"],
-        "approval_points": ["manager_approval", "hr_approval"],
-        "decision_paths": [{"decision": "approve_or_reject", "paths": ["approved", "rejected"]}],
-        "required_config_sections": ["trigger", "inputs", "roles", "approvals"],
-        "supported_input_types": ["text", "date", "select"],
-        "expected_output_types": ["approval_status", "notification"],
-        "exception_categories": ["rejection", "timeout"],
-        "completion_conditions": ["all_approvals_received"],
-        "validation_rules": [],
-        "model_owner": context["user"].user_id,
-        "parent_model_id": None,
-        "replacement_model_id": None,
-        "deprecated": False,
-        "created_at": utcnow(),
-        "updated_at": utcnow(),
-        "published_at": utcnow(),
-        "archived_at": None,
-    }
-    process_models_col.insert_one(model)
+    # 2. Departments
+    depts = [
+        ("dept-healthcare", "Healthcare Ops"),
+        ("dept-hr", "Human Resources"),
+        ("dept-finance", "Finance"),
+        ("dept-support", "Customer Service"),
+        ("dept-procurement", "Procurement"),
+        ("dept-supply-chain", "Logistics"),
+    ]
+    for did, name in depts:
+        if not departments_col.find_one({"department_id": did, "workspace_id": workspace_id}):
+            departments_col.insert_one({
+                "department_id": did, "workspace_id": workspace_id, "name": name,
+                "description": f"{name} department", "status": "active",
+                "created_at": utcnow(), "updated_at": utcnow()
+            })
 
-    # Create workflow template
-    template = {
-        "template_id": "poc-leave-approval-template",
-        "workspace_id": workspace_id,
-        "process_model_id": "poc-leave-approval-model",
-        "variant_id": None,
-        "name": "Standard Leave Approval Workflow",
-        "description": "A standard leave approval workflow with manager and HR approval stages.",
-        "applicability": {"industries": ["all"], "departments": ["human_resources"]},
-        "trigger": {
-            "trigger_id": "manual-trigger",
-            "type": "manual",
-            "name": "Manual Start",
-            "config": {},
-            "input_schema": {
-                "employee_name": {"type": "text", "required": True, "label": "Employee Name"},
-                "leave_type": {"type": "select", "required": True, "label": "Leave Type", "options": ["annual", "sick", "personal", "unpaid"]},
-                "start_date": {"type": "date", "required": True, "label": "Start Date"},
-                "end_date": {"type": "date", "required": True, "label": "End Date"},
-                "days_requested": {"type": "number", "required": True, "label": "Days Requested"},
-                "reason": {"type": "text", "required": False, "label": "Reason"},
-            },
-        },
-        "stages": [
-            {"stage_id": "submission", "name": "Submission", "description": "Employee submits leave request", "sequence": 1, "steps": ["step_submit"]},
-            {"stage_id": "review", "name": "Review", "description": "Manager and HR review", "sequence": 2, "steps": ["step_check_days", "step_manager_approval", "step_hr_approval"]},
-            {"stage_id": "completion", "name": "Completion", "description": "Final notification", "sequence": 3, "steps": ["step_notify_approved", "step_notify_rejected", "step_end_approved", "step_end_rejected"]},
-        ],
-        "steps": [
-            {
-                "step_id": "step_submit",
-                "name": "Submit Leave Request",
-                "description": "Employee fills in the leave request form.",
-                "step_type": "form_input",
-                "stage_id": "submission",
-                "assigned_role": "employee",
-                "assignment_method": "role",
-                "config": {
-                    "required_fields": [
-                        {"key": "employee_name", "label": "Employee Name", "type": "text", "required": True},
-                        {"key": "leave_type", "label": "Leave Type", "type": "select", "required": True},
-                        {"key": "start_date", "label": "Start Date", "type": "date", "required": True},
-                        {"key": "end_date", "label": "End Date", "type": "date", "required": True},
-                        {"key": "days_requested", "label": "Days Requested", "type": "number", "required": True},
-                        {"key": "reason", "label": "Reason", "type": "text", "required": False},
-                    ],
+    # 3. Starter Process Models
+    starter_models = [
+        # Healthcare
+        ("model-patient-referral", "Patient Referral Management", "ind-healthcare"),
+        ("model-healthcare-vendor", "Healthcare Vendor Onboarding", "ind-healthcare"),
+        ("model-clinical-doc", "Clinical Document Routing", "ind-healthcare"),
+        # HR
+        ("model-emp-onboarding", "Employee Onboarding", "ind-hr"),
+        ("model-leave-approval", "Leave Approval", "ind-hr"),
+        ("model-recruitment", "Recruitment Request", "ind-hr"),
+        # Finance
+        ("model-expense", "Expense Reimbursement", "ind-finance"),
+        ("model-invoice", "Invoice Approval", "ind-finance"),
+        ("model-budget", "Budget Request", "ind-finance"),
+        # Customer Support
+        ("model-complaint", "Complaint Handling", "ind-support"),
+        ("model-ticket", "Ticket Escalation", "ind-support"),
+        ("model-refund", "Refund Request", "ind-support"),
+        # Procurement
+        ("model-purchase", "Purchase Requisition", "ind-procurement"),
+        ("model-vendor-reg", "Vendor Registration", "ind-procurement"),
+        ("model-vendor-perf", "Vendor Performance Review", "ind-procurement"),
+        # Supply Chain
+        ("model-inventory", "Inventory Replenishment", "ind-supply-chain"),
+        ("model-shipment", "Shipment Exception Handling", "ind-supply-chain"),
+        ("model-stock-transfer", "Stock Transfer Request", "ind-supply-chain"),
+    ]
+
+    for mid, name, iid in starter_models:
+        if not process_models_col.find_one({"model_id": mid}):
+            model = create_starter_model(mid, name, f"Standard process for {name.lower()}.", industries=[iid])
+            process_models_col.insert_one(model)
+
+    # 4. Existing POC model (Legacy support)
+    if not process_models_col.find_one({"model_id": "poc-leave-approval-model", "workspace_id": workspace_id}):
+        model = {
+            "model_id": "poc-leave-approval-model",
+            "workspace_id": workspace_id,
+            "name": "Leave Approval Process",
+            "description": "Standard leave approval process with manager and HR review.",
+            "purpose": "Manage employee leave requests through structured approval workflow.",
+            "source_type": "global",
+            "ownership_scope": "workspace",
+            "catalogue_status": "published",
+            "publication_status": "published",
+            "version": "1.0",
+            "applicable_industries": ["all"],
+            "applicable_segments": [],
+            "applicable_departments": ["human_resources"],
+            "applicable_teams": [],
+            "applicable_families": ["leave_management"],
+            "tags": ["leave", "approval", "hr", "employee"],
+            "stages": [
+                {"stage_id": "submission", "name": "Submission", "sequence": 1},
+                {"stage_id": "review", "name": "Review", "sequence": 2},
+                {"stage_id": "completion", "name": "Completion", "sequence": 3},
+            ],
+            "suggested_roles": ["employee", "manager", "hr_admin"],
+            "approval_points": ["manager_approval", "hr_approval"],
+            "created_at": utcnow(),
+            "updated_at": utcnow(),
+            "published_at": utcnow(),
+        }
+        process_models_col.insert_one(model)
+
+    # 5. Workflow Template for POC
+    if not workflow_templates_col.find_one({"template_id": "poc-leave-approval-template", "workspace_id": workspace_id}):
+        template = {
+            "template_id": "poc-leave-approval-template",
+            "workspace_id": workspace_id,
+            "process_model_id": "poc-leave-approval-model",
+            "name": "Standard Leave Approval Workflow",
+            "description": "A standard leave approval workflow with manager and HR approval stages.",
+            "trigger": {
+                "trigger_id": "manual-trigger",
+                "type": "manual",
+                "name": "Manual Start",
+                "config": {},
+                "input_schema": {
+                    "days_requested": {"type": "number", "required": True, "label": "Days Requested"},
                 },
-                "input_mapping": {},
-                "output_mapping": {"leave_request": "submitted_data"},
-                "entry_conditions": [],
-                "transitions": {"success": "step_check_days", "rejection": None, "failure": None},
-                "timeout_config": {},
-                "retry_config": {},
-                "required": True,
             },
-            {
-                "step_id": "step_check_days",
-                "name": "Check Days Threshold",
-                "description": "Check if leave days exceed threshold for HR approval.",
-                "step_type": "condition",
-                "stage_id": "review",
-                "assigned_role": None,
-                "assignment_method": None,
-                "config": {"field": "days_requested", "operator": "greater_than", "value": "3"},
-                "input_mapping": {},
-                "output_mapping": {},
-                "entry_conditions": [],
-                "transitions": {"success": "step_hr_approval", "rejection": "step_manager_approval", "failure": "step_manager_approval"},
-                "timeout_config": {},
-                "retry_config": {},
-                "required": True,
-            },
-            {
-                "step_id": "step_manager_approval",
-                "name": "Manager Approval",
-                "description": "Direct manager reviews and approves/rejects the request.",
-                "step_type": "approval",
-                "stage_id": "review",
-                "assigned_role": "manager",
-                "assignment_method": "role",
-                "config": {},
-                "input_mapping": {},
-                "output_mapping": {},
-                "entry_conditions": [],
-                "transitions": {"success": "step_notify_approved", "rejection": "step_notify_rejected", "failure": None},
-                "timeout_config": {},
-                "retry_config": {},
-                "required": True,
-            },
-            {
-                "step_id": "step_hr_approval",
-                "name": "HR Approval",
-                "description": "HR department reviews and approves/rejects extended leave.",
-                "step_type": "approval",
-                "stage_id": "review",
-                "assigned_role": "hr_admin",
-                "assignment_method": "role",
-                "config": {},
-                "input_mapping": {},
-                "output_mapping": {},
-                "entry_conditions": [],
-                "transitions": {"success": "step_manager_approval", "rejection": "step_notify_rejected", "failure": None},
-                "timeout_config": {},
-                "retry_config": {},
-                "required": True,
-            },
-            {
-                "step_id": "step_notify_approved",
-                "name": "Send Approval Notification",
-                "description": "Notify the employee that their leave has been approved.",
-                "step_type": "notification",
-                "stage_id": "completion",
-                "assigned_role": None,
-                "assignment_method": None,
-                "config": {"recipient_role": "employee", "title": "Leave Approved", "message": "Your leave request has been approved."},
-                "input_mapping": {},
-                "output_mapping": {},
-                "entry_conditions": [],
-                "transitions": {"success": "step_end_approved", "rejection": None, "failure": None},
-                "timeout_config": {},
-                "retry_config": {},
-                "required": True,
-            },
-            {
-                "step_id": "step_notify_rejected",
-                "name": "Send Rejection Notification",
-                "description": "Notify the employee that their leave has been rejected.",
-                "step_type": "notification",
-                "stage_id": "completion",
-                "assigned_role": None,
-                "assignment_method": None,
-                "config": {"recipient_role": "employee", "title": "Leave Rejected", "message": "Your leave request has been rejected."},
-                "input_mapping": {},
-                "output_mapping": {},
-                "entry_conditions": [],
-                "transitions": {"success": "step_end_rejected", "rejection": None, "failure": None},
-                "timeout_config": {},
-                "retry_config": {},
-                "required": True,
-            },
-            {
-                "step_id": "step_end_approved",
-                "name": "End - Approved",
-                "description": "Workflow completes with approval.",
-                "step_type": "end",
-                "stage_id": "completion",
-                "assigned_role": None,
-                "assignment_method": None,
-                "config": {"completion_status": "approved"},
-                "input_mapping": {},
-                "output_mapping": {},
-                "entry_conditions": [],
-                "transitions": {},
-                "timeout_config": {},
-                "retry_config": {},
-                "required": True,
-            },
-            {
-                "step_id": "step_end_rejected",
-                "name": "End - Rejected",
-                "description": "Workflow completes with rejection.",
-                "step_type": "end",
-                "stage_id": "completion",
-                "assigned_role": None,
-                "assignment_method": None,
-                "config": {"completion_status": "rejected"},
-                "input_mapping": {},
-                "output_mapping": {},
-                "entry_conditions": [],
-                "transitions": {},
-                "timeout_config": {},
-                "retry_config": {},
-                "required": True,
-            },
-        ],
-        "roles": ["employee", "manager", "hr_admin"],
-        "input_definitions": [
-            {"key": "employee_name", "label": "Employee Name", "type": "text", "required": True},
-            {"key": "leave_type", "label": "Leave Type", "type": "select", "required": True, "options": ["annual", "sick", "personal", "unpaid"]},
-            {"key": "start_date", "label": "Start Date", "type": "date", "required": True},
-            {"key": "end_date", "label": "End Date", "type": "date", "required": True},
-            {"key": "days_requested", "label": "Days Requested", "type": "number", "required": True},
-            {"key": "reason", "label": "Reason", "type": "text", "required": False},
-        ],
-        "output_definitions": [{"key": "approval_status", "type": "text"}],
-        "visibility": "public",
-        "publication_status": "published",
-        "version": "1.0",
-        "source": "platform",
-        "ownership_scope": "workspace",
-        "workspace_id": workspace_id,
-        "created_at": utcnow(),
-        "updated_at": utcnow(),
-    }
-    workflow_templates_col.insert_one(template)
+            "stages": [
+                {"stage_id": "submission", "name": "Submission", "sequence": 1, "steps": ["step_submit"]},
+                {"stage_id": "review", "name": "Review", "sequence": 2, "steps": ["step_manager_approval"]},
+                {"stage_id": "completion", "name": "Completion", "sequence": 3, "steps": ["step_end"]},
+            ],
+            "steps": [
+                {
+                    "step_id": "step_submit",
+                    "name": "Submit Request",
+                    "step_type": "form_input",
+                    "assigned_role": "employee",
+                    "stage_id": "submission",
+                    "transitions": {"success": "step_manager_approval"}
+                },
+                {
+                    "step_id": "step_manager_approval",
+                    "name": "Manager Approval",
+                    "step_type": "approval",
+                    "assigned_role": "manager",
+                    "stage_id": "review",
+                    "transitions": {"success": "step_end", "rejection": "step_end"}
+                },
+                {
+                    "step_id": "step_end",
+                    "name": "End",
+                    "step_type": "end",
+                    "stage_id": "completion",
+                    "transitions": {}
+                }
+            ],
+            "roles": ["employee", "manager"],
+            "publication_status": "published",
+            "version": "1.0",
+            "source_type": "workspace",
+            "created_at": utcnow(),
+            "updated_at": utcnow(),
+        }
+        workflow_templates_col.insert_one(template)
 
-    return {"message": "Seeded successfully", "model_id": "poc-leave-approval-model", "template_id": "poc-leave-approval-template"}
+    return {"message": "Seeded successfully", "industries_seeded": len(industries), "models_seeded": len(starter_models)}
 
 @router.get("/templates")
 def get_templates(
@@ -327,8 +271,8 @@ def create_workflow(
         "status": "draft",
         "version": 1,
         "definition": {
-            "trigger": template["trigger"],
-            "inputs": template["input_definitions"],
+            "trigger": template.get("trigger", {}),
+            "inputs": template.get("input_definitions", []),
             "participants": [{"role": r, "department": "", "team": "", "assignment_method": "role"} for r in template.get("roles", [])],
             "stages": template["stages"],
             "steps": template["steps"],
