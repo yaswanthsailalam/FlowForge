@@ -288,7 +288,10 @@ def poc_seed(
     return {"message": "Seeded successfully", "model_id": "poc-leave-approval-model", "template_id": "poc-leave-approval-template"}
 
 @router.get("/templates")
-def get_templates(context: dict = Depends(deps.get_workspace_context)):
+def get_templates(
+    context: dict = Depends(deps.get_workspace_context),
+    _ = Depends(deps.require_poc_enabled)
+):
     workspace_id = context["workspace_id"]
     templates = list(workflow_templates_col.find({"workspace_id": workspace_id}))
     return {"templates": serialize_doc(templates)}
@@ -296,7 +299,8 @@ def get_templates(context: dict = Depends(deps.get_workspace_context)):
 @router.post("/workflows")
 def create_workflow(
     req: CreateWorkflowRequest,
-    context: dict = Depends(deps.require_architect)
+    context: dict = Depends(deps.require_architect),
+    _ = Depends(deps.require_poc_enabled)
 ):
     """Create a new workflow from a template."""
     workspace_id = context["workspace_id"]
@@ -355,7 +359,10 @@ def create_workflow(
     return serialize_doc(workflows_col.find_one({"workflow_id": workflow_id}))
 
 @router.get("/workflows")
-def get_workflows(context: dict = Depends(deps.get_workspace_context)):
+def get_workflows(
+    context: dict = Depends(deps.get_workspace_context),
+    _ = Depends(deps.require_poc_enabled)
+):
     workspace_id = context["workspace_id"]
     wfs = list(workflows_col.find({"workspace_id": workspace_id}).sort("created_at", -1))
     return {"workflows": serialize_doc(wfs)}
@@ -363,7 +370,8 @@ def get_workflows(context: dict = Depends(deps.get_workspace_context)):
 @router.get("/workflows/{workflow_id}/versions")
 def get_workflow_versions(
     workflow_id: str,
-    context: dict = Depends(deps.get_workspace_context)
+    context: dict = Depends(deps.get_workspace_context),
+    _ = Depends(deps.require_poc_enabled)
 ):
     workspace_id = context["workspace_id"]
     # Ensure workflow belongs to workspace
@@ -377,7 +385,8 @@ def get_workflow_versions(
 @router.post("/workflows/{workflow_id}/validate")
 def validate_workflow_endpoint(
     workflow_id: str,
-    context: dict = Depends(deps.require_architect)
+    context: dict = Depends(deps.require_architect),
+    _ = Depends(deps.require_poc_enabled)
 ):
     """Validate a workflow definition."""
     workspace_id = context["workspace_id"]
@@ -417,7 +426,8 @@ def validate_workflow_endpoint(
 @router.post("/workflows/{workflow_id}/publish")
 def publish_workflow(
     workflow_id: str,
-    context: dict = Depends(deps.require_architect)
+    context: dict = Depends(deps.require_architect),
+    _ = Depends(deps.require_poc_enabled)
 ):
     """Publish a validated workflow."""
     workspace_id = context["workspace_id"]
@@ -465,7 +475,8 @@ def publish_workflow(
 @router.post("/runs")
 def start_run(
     req: StartRunRequest,
-    context: dict = Depends(deps.require_operator)
+    context: dict = Depends(deps.require_operator),
+    _ = Depends(deps.require_poc_enabled)
 ):
     """Start a workflow run."""
     workspace_id = context["workspace_id"]
@@ -479,7 +490,8 @@ def start_run(
 @router.get("/runs/{run_id}")
 def get_run(
     run_id: str,
-    context: dict = Depends(deps.get_workspace_context)
+    context: dict = Depends(deps.get_workspace_context),
+    _ = Depends(deps.require_poc_enabled)
 ):
     """Get workflow run details."""
     workspace_id = context["workspace_id"]
@@ -503,7 +515,8 @@ def get_tasks(
     status: str = Query(default=None),
     assigned_role: str = Query(default=None),
     limit: int = Query(default=50),
-    context: dict = Depends(deps.get_workspace_context)
+    context: dict = Depends(deps.get_workspace_context),
+    _ = Depends(deps.require_poc_enabled)
 ):
     workspace_id = context["workspace_id"]
     query = {"workspace_id": workspace_id}
@@ -518,25 +531,60 @@ def get_tasks(
 def complete_task(
     task_id: str,
     req: CompleteTaskRequest,
-    context: dict = Depends(deps.require_operator)
+    context: dict = Depends(deps.require_operator),
+    _ = Depends(deps.require_poc_enabled)
 ):
     """Complete a workflow task."""
     workspace_id = context["workspace_id"]
+    current_user = context["user"]
+    current_role = context["role"]
+
     task = tasks_col.find_one({"task_id": task_id, "workspace_id": workspace_id})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    if task["status"] == "completed":
-        raise HTTPException(status_code=400, detail="Task already completed")
+    if task["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Task is in invalid state for completion: {task['status']}")
 
+    # Verify assignment: assigned user, assigned role, or workspace admin
+    is_assigned_user = task.get("assigned_to") == current_user.user_id
+    is_assigned_role = task.get("assigned_role") == current_role
+    is_admin = current_role == "workspace_admin"
+
+    if not (is_assigned_user or is_assigned_role or is_admin):
+        raise HTTPException(status_code=403, detail="You are not authorized to complete this task")
+
+    # Update task
     tasks_col.update_one(
         {"task_id": task_id},
-        {"$set": {"status": "completed", "submitted_data": req.submitted_data, "completed_at": utcnow(), "updated_at": utcnow()}}
+        {"$set": {
+            "status": "completed",
+            "submitted_data": req.submitted_data,
+            "completed_by": current_user.user_id,
+            "completed_at": utcnow(),
+            "updated_at": utcnow()
+        }}
     )
 
+    # Update step run
     step_runs_col.update_one(
         {"step_run_id": task["step_run_id"]},
         {"$set": {"status": "completed", "outputs": req.submitted_data, "completed_at": utcnow(), "updated_at": utcnow()}}
+    )
+
+    # Audit
+    engine.create_audit_event(
+        workspace_id=workspace_id,
+        actor_id=current_user.user_id,
+        actor_role=current_role,
+        event_type="task_completed",
+        entity_type="task",
+        entity_id=task_id,
+        workflow_id=task.get("workflow_id"),
+        run_id=task["run_id"],
+        step_run_id=task["step_run_id"],
+        previous_state={"status": "pending"},
+        new_state={"status": "completed", "submitted_data": req.submitted_data},
     )
 
     run = workflow_runs_col.find_one({"run_id": task["run_id"]})
@@ -563,7 +611,8 @@ def get_approvals(
     status: str = Query(default=None),
     assigned_role: str = Query(default=None),
     limit: int = Query(default=50),
-    context: dict = Depends(deps.get_workspace_context)
+    context: dict = Depends(deps.get_workspace_context),
+    _ = Depends(deps.require_poc_enabled)
 ):
     workspace_id = context["workspace_id"]
     query = {"workspace_id": workspace_id}
@@ -578,25 +627,65 @@ def get_approvals(
 def decide_approval(
     approval_id: str,
     req: ApprovalDecisionRequest,
-    context: dict = Depends(deps.require_approver)
+    context: dict = Depends(deps.require_approver),
+    _ = Depends(deps.require_poc_enabled)
 ):
     """Make an approval decision."""
     workspace_id = context["workspace_id"]
+    current_user = context["user"]
+    current_role = context["role"]
+
     approval = approvals_col.find_one({"approval_id": approval_id, "workspace_id": workspace_id})
     if not approval:
         raise HTTPException(status_code=404, detail="Approval not found")
 
     if approval["status"] != "pending":
-        raise HTTPException(status_code=400, detail="Approval already decided")
+        raise HTTPException(status_code=400, detail=f"Approval is in invalid state: {approval['status']}")
 
+    if req.decision not in ["approved", "rejected"]:
+        raise HTTPException(status_code=400, detail="Decision must be 'approved' or 'rejected'")
+
+    # Verify assignment: assigned user, assigned role, or workspace admin
+    is_assigned_user = approval.get("assigned_to") == current_user.user_id
+    is_assigned_role = approval.get("assigned_role") == current_role
+    is_admin = current_role == "workspace_admin"
+
+    if not (is_assigned_user or is_assigned_role or is_admin):
+        raise HTTPException(status_code=403, detail="You are not authorized to make a decision on this approval")
+
+    # Update approval
     approvals_col.update_one(
         {"approval_id": approval_id},
-        {"$set": {"status": req.decision, "decision": req.decision, "decided_by": context["user"].user_id, "decided_at": utcnow()}}
+        {"$set": {
+            "status": req.decision,
+            "decision": req.decision,
+            "decision_comment": req.comment,
+            "decided_by": current_user.user_id,
+            "decided_at": utcnow(),
+            "updated_at": utcnow()
+        }}
     )
 
+    # Update step run
     step_runs_col.update_one(
         {"step_run_id": approval["step_run_id"]},
-        {"$set": {"status": req.decision, "completed_at": utcnow()}}
+        {"$set": {"status": req.decision, "completed_at": utcnow(), "updated_at": utcnow()}}
+    )
+
+    # Audit
+    engine.create_audit_event(
+        workspace_id=workspace_id,
+        actor_id=current_user.user_id,
+        actor_role=current_role,
+        event_type="approval_decided",
+        entity_type="approval",
+        entity_id=approval_id,
+        workflow_id=approval.get("workflow_id"),
+        run_id=approval["run_id"],
+        step_run_id=approval["step_run_id"],
+        previous_state={"status": "pending"},
+        new_state={"status": req.decision, "decision": req.decision},
+        metadata={"comment": req.comment}
     )
 
     run = workflow_runs_col.find_one({"run_id": approval["run_id"]})
@@ -622,7 +711,8 @@ def get_audit(
     entity_type: str = Query(default=None),
     limit: int = Query(default=50, le=200),
     skip: int = Query(default=0),
-    context: dict = Depends(deps.get_workspace_context)
+    context: dict = Depends(deps.get_workspace_context),
+    _ = Depends(deps.require_poc_enabled)
 ):
     """Get audit events."""
     workspace_id = context["workspace_id"]

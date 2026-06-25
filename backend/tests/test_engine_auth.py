@@ -36,43 +36,43 @@ def test_workflow_lifecycle_authenticated(workspace_context):
     workspace_id, headers = workspace_context
     headers["X-Workspace-Id"] = workspace_id
 
-    # 1. Seed
     with patch("backend.app.core.config.settings.ENABLE_POC_ENDPOINTS", True):
+        # 1. Seed
         res = client.post("/api/poc/seed", headers=headers)
         assert res.status_code == 200
 
-    # 2. Get templates
-    res = client.get("/api/poc/templates", headers=headers)
-    assert res.status_code == 200
-    templates_res = res.json()
-    template_id = templates_res["templates"][0]["template_id"]
+        # 2. Get templates
+        res = client.get("/api/poc/templates", headers=headers)
+        assert res.status_code == 200
+        templates_res = res.json()
+        template_id = templates_res["templates"][0]["template_id"]
 
-    # 3. Create workflow
-    wf_res = client.post("/api/poc/workflows", json={
-        "template_id": template_id,
-        "name": "Test Workflow"
-    }, headers=headers)
-    assert wf_res.status_code == 200
-    workflow_id = wf_res.json()["workflow_id"]
+        # 3. Create workflow
+        wf_res = client.post("/api/poc/workflows", json={
+            "template_id": template_id,
+            "name": "Test Workflow"
+        }, headers=headers)
+        assert wf_res.status_code == 200
+        workflow_id = wf_res.json()["workflow_id"]
 
-    # 4. Validate
-    val_res = client.post(f"/api/poc/workflows/{workflow_id}/validate", headers=headers)
-    assert val_res.status_code == 200
-    assert val_res.json()["valid"] is True
+        # 4. Validate
+        val_res = client.post(f"/api/poc/workflows/{workflow_id}/validate", headers=headers)
+        assert val_res.status_code == 200
+        assert val_res.json()["valid"] is True
 
-    # 5. Publish
-    pub_res = client.post(f"/api/poc/workflows/{workflow_id}/publish", headers=headers)
-    assert pub_res.status_code == 200
-    version_id = pub_res.json()["version_id"]
+        # 5. Publish
+        pub_res = client.post(f"/api/poc/workflows/{workflow_id}/publish", headers=headers)
+        assert pub_res.status_code == 200
+        version_id = pub_res.json()["version_id"]
 
-    # 6. Start Run
-    run_res = client.post("/api/poc/runs", json={
-        "workflow_version_id": version_id,
-        "inputs": {"days_requested": "2"}
-    }, headers=headers)
-    assert run_res.status_code == 200
-    run_id = run_res.json()["run_id"]
+        # 6. Start Run
+        run_res = client.post("/api/poc/runs", json={
+            "workflow_version_id": version_id,
+            "inputs": {"days_requested": "2"}
+        }, headers=headers)
+        assert run_res.status_code == 200
+        run_id = run_res.json()["run_id"]
 
-    # 7. Get Run
-    run_data = client.get(f"/api/poc/runs/{run_id}", headers=headers).json()
-    assert run_data["run"]["status"] == "waiting_task"
+        # 7. Get Run
+        run_data = client.get(f"/api/poc/runs/{run_id}", headers=headers).json()
+        assert run_data["run"]["status"] == "waiting_task"
