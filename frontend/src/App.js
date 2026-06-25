@@ -1,55 +1,88 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "@/contexts/AuthContext";
+import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
+import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import PublicRoute from "@/components/auth/PublicRoute";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+// Pages
+import LoginPage from "@/pages/auth/LoginPage";
+import RegisterPage from "@/pages/auth/RegisterPage";
+import WorkspaceListPage from "@/pages/workspaces/WorkspaceListPage";
+import WorkspaceCreatePage from "@/pages/workspaces/WorkspaceCreatePage";
+import DashboardPage from "@/pages/dashboard/DashboardPage";
+import AppLayout from "@/components/layout/AppLayout";
+import PlaceholderPage from "@/pages/PlaceholderPage";
 
 function App() {
   return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
+    <BrowserRouter>
+      <AuthProvider>
+        <WorkspaceProvider>
+          <Routes>
+            {/* Public Routes */}
+            <Route
+              path="/login"
+              element={
+                <PublicRoute>
+                  <LoginPage />
+                </PublicRoute>
+              }
+            />
+            <Route
+              path="/register"
+              element={
+                <PublicRoute>
+                  <RegisterPage />
+                </PublicRoute>
+              }
+            />
+
+            {/* Protected Routes (No Workspace required) */}
+            <Route
+              path="/workspaces"
+              element={
+                <ProtectedRoute requireWorkspace={false}>
+                  <WorkspaceListPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/workspaces/create"
+              element={
+                <ProtectedRoute requireWorkspace={false}>
+                  <WorkspaceCreatePage />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Protected Routes (Workspace required) */}
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="processes" element={<PlaceholderPage title="Process Catalogue" />} />
+              <Route path="workflows" element={<PlaceholderPage title="Workflows" />} />
+              <Route path="runs" element={<PlaceholderPage title="Runs" />} />
+              <Route path="tasks" element={<PlaceholderPage title="Tasks" />} />
+              <Route path="approvals" element={<PlaceholderPage title="Approvals" />} />
+              <Route path="audit-logs" element={<PlaceholderPage title="Audit Logs" />} />
+              <Route path="integrations" element={<PlaceholderPage title="Integrations" />} />
+              <Route path="settings" element={<PlaceholderPage title="Members and Settings" />} />
+            </Route>
+
+            {/* Fallback */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </WorkspaceProvider>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
 
