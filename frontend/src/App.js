@@ -14,6 +14,13 @@ import DashboardPage from "@/pages/dashboard/DashboardPage";
 import AppLayout from "@/components/layout/AppLayout";
 import PlaceholderPage from "@/pages/PlaceholderPage";
 
+// Catalogue
+import CataloguePage from "@/pages/catalogue/CataloguePage";
+import ProcessModelDetailPage from "@/pages/catalogue/ProcessModelDetailPage";
+import CustomModelCreatePage from "@/pages/catalogue/CustomModelCreatePage";
+import VariantDetailPage from "@/pages/catalogue/VariantDetailPage";
+import TemplateDetailPage from "@/pages/catalogue/TemplateDetailPage";
+
 function App() {
   return (
     <BrowserRouter>
@@ -67,7 +74,11 @@ function App() {
             >
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<DashboardPage />} />
-              <Route path="processes" element={<PlaceholderPage title="Process Catalogue" />} />
+              <Route path="processes" element={<CataloguePage />} />
+              <Route path="processes/new" element={<CustomModelCreatePage />} />
+              <Route path="processes/:modelId" element={<ProcessModelDetailPage />} />
+              <Route path="variants/:variantId" element={<VariantDetailPage />} />
+              <Route path="templates/:templateId" element={<TemplateDetailPage />} />
               <Route path="workflows" element={<PlaceholderPage title="Workflows" />} />
               <Route path="runs" element={<PlaceholderPage title="Runs" />} />
               <Route path="tasks" element={<PlaceholderPage title="Tasks" />} />
