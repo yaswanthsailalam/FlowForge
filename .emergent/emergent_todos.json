@@ -1,0 +1,42 @@
+[
+  {
+    "content": "Phase 1: Get OpenAI GPT-4o integration playbook (Emergent Key)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 1: Design MongoDB schema + workflow state machine POC",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 1: Build POC endpoints (seed, create workflow, validate, publish, execute, tasks, approvals, audit)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 1: Test POC with Python script - 21/21 tests passed",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: Get design guidelines from design agent",
+    "status": "in_progress"
+  },
+  {
+    "content": "Phase 2: Build full backend (auth, workspaces, RBAC, catalogue, workflows, execution, tasks, approvals, notifications, audit)",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 2: Build full frontend (40+ pages/views with stunning UI)",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 2: Seed full department catalogue (80-100+ process models)",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 2: End-to-end testing with testing agent",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 3: AI assistance, advanced features, polish",
+    "status": "pending"
+  }
+]
