@@ -1,5 +1,24 @@
+import logging
+import sys
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from backend.app.core.config import settings
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
+
+# Sensitive URL masking for safe logging
+def get_masked_url(url: str) -> str:
+    if "@" in url:
+        return url.split("@")[-1]
+    return "localhost"
+
+logger.info(f"Connecting to MongoDB at {get_masked_url(settings.MONGO_URL)}")
+logger.info(f"Using database: {settings.DB_NAME}")
 
 client = MongoClient(settings.MONGO_URL)
 db = client[settings.DB_NAME]
@@ -30,32 +49,43 @@ roles_col = db["roles"]
 permissions_col = db["permissions"]
 
 def init_db():
-    # Security/Auth Indexes
-    users_col.create_index([("email", ASCENDING)], unique=True)
-    users_col.create_index([("user_id", ASCENDING)], unique=True)
+    try:
+        # Check connection
+        client.admin.command('ping')
+        logger.info("Successfully connected to MongoDB")
 
-    workspaces_col.create_index([("workspace_id", ASCENDING)], unique=True)
+        # Security/Auth Indexes
+        users_col.create_index([("email", ASCENDING)], unique=True)
+        users_col.create_index([("user_id", ASCENDING)], unique=True)
 
-    workspace_memberships_col.create_index(
-        [("workspace_id", ASCENDING), ("user_id", ASCENDING)],
-        unique=True
-    )
-    workspace_memberships_col.create_index([("user_id", ASCENDING)])
+        workspaces_col.create_index([("workspace_id", ASCENDING)], unique=True)
 
-    # Preserved Engine Indexes
-    process_models_col.create_index([("catalogue_status", ASCENDING)])
-    process_models_col.create_index([("applicable_departments", ASCENDING)])
-    process_models_col.create_index([("applicable_families", ASCENDING)])
-    process_models_col.create_index([("tags", ASCENDING)])
-    process_models_col.create_index([("workspace_id", ASCENDING)])
-    workflows_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
-    workflow_versions_col.create_index([("workflow_id", ASCENDING), ("version", DESCENDING)])
-    workflow_runs_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
-    workflow_runs_col.create_index([("workflow_version_id", ASCENDING)])
-    step_runs_col.create_index([("run_id", ASCENDING), ("status", ASCENDING)])
-    tasks_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
-    tasks_col.create_index([("assigned_role", ASCENDING), ("status", ASCENDING)])
-    approvals_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
-    audit_events_col.create_index([("workspace_id", ASCENDING), ("timestamp", DESCENDING)])
-    audit_events_col.create_index([("entity_type", ASCENDING), ("entity_id", ASCENDING)])
-    audit_events_col.create_index([("run_id", ASCENDING)])
+        workspace_memberships_col.create_index(
+            [("workspace_id", ASCENDING), ("user_id", ASCENDING)],
+            unique=True
+        )
+        workspace_memberships_col.create_index([("user_id", ASCENDING)])
+
+        # Preserved Engine Indexes
+        process_models_col.create_index([("catalogue_status", ASCENDING)])
+        process_models_col.create_index([("applicable_departments", ASCENDING)])
+        process_models_col.create_index([("applicable_families", ASCENDING)])
+        process_models_col.create_index([("tags", ASCENDING)])
+        process_models_col.create_index([("workspace_id", ASCENDING)])
+        workflows_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
+        workflow_versions_col.create_index([("workflow_id", ASCENDING), ("version", DESCENDING)])
+        workflow_runs_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
+        workflow_runs_col.create_index([("workflow_version_id", ASCENDING)])
+        step_runs_col.create_index([("run_id", ASCENDING), ("status", ASCENDING)])
+        tasks_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
+        tasks_col.create_index([("assigned_role", ASCENDING), ("status", ASCENDING)])
+        approvals_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
+        audit_events_col.create_index([("workspace_id", ASCENDING), ("timestamp", DESCENDING)])
+        audit_events_col.create_index([("entity_type", ASCENDING), ("entity_id", ASCENDING)])
+        audit_events_col.create_index([("run_id", ASCENDING)])
+
+        logger.info("Collection indexes initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        # In a real environment we might want to fail hard here
+        # raise e
