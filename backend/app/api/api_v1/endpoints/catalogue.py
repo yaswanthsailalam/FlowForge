@@ -5,7 +5,7 @@ from math import ceil
 from backend.app.api import deps
 from backend.app.core.utils import utcnow, new_id, serialize_doc
 from backend.app.db.mongodb import (
-    process_models_col, audit_events_col, db
+    process_models_col, db
 )
 from backend.app.schemas.catalogue import (
     ProcessModelCreate, ProcessModelUpdate, ProcessModelInDB,
@@ -45,7 +45,6 @@ def list_models(
     context: dict = Depends(deps.get_workspace_context)
 ):
     workspace_id = context["workspace_id"]
-    # Visible if published global OR belonging to current workspace
     query = {"$or": [
         {"source_type": "global", "$or": [{"lifecycle_status": "published"}, {"catalogue_status": "published"}]},
         {"workspace_id": workspace_id}
@@ -142,7 +141,6 @@ def update_model(
     update_data = model_in.model_dump(exclude_unset=True)
     update_data["updated_at"] = utcnow()
 
-    # Transition handling: Resubmit from Changes Requested
     if model["lifecycle_status"] == "changes_requested":
          update_data["lifecycle_status"] = "draft"
 
@@ -159,7 +157,6 @@ def submit_for_review(
     if not model or model.get("is_published"):
          raise HTTPException(status_code=400, detail="Invalid model for review")
 
-    # Only Draft or Changes Requested can be submitted
     if model["lifecycle_status"] not in ["draft", "changes_requested"]:
         raise HTTPException(status_code=400, detail=f"Cannot submit model in '{model['lifecycle_status']}' status")
 
@@ -190,7 +187,6 @@ def decide_review(
     if not model or not review:
         raise HTTPException(status_code=404, detail="No pending review found for this model")
 
-    # Authorization: Must be Platform Admin for Global, or Workspace Admin for Workspace models
     if model["source_type"] == "global" and not context["user"].is_platform_admin:
         raise HTTPException(status_code=403, detail="Only platform admins can decide on global reviews")
 
@@ -301,3 +297,35 @@ def clone_published_model(
 
     process_models_col.insert_one(new_model)
     return serialize_doc(new_model)
+
+@router.post("/process-models/{model_id}/favourite")
+def favourite_process_model(
+    model_id: str,
+    context: dict = Depends(deps.get_workspace_context)
+):
+    workspace_id = context["workspace_id"]
+    user_id = context["user"].user_id
+    favourites_col = db["catalogue_favourites"]
+
+    existing = favourites_col.find_one({"user_id": user_id, "workspace_id": workspace_id, "model_id": model_id})
+    if existing:
+        favourites_col.delete_one({"_id": existing["_id"]})
+        return {"favourited": False, "model_id": model_id}
+    else:
+        favourites_col.insert_one({
+            "user_id": user_id,
+            "workspace_id": workspace_id,
+            "model_id": model_id,
+            "created_at": utcnow()
+        })
+        return {"favourited": True, "model_id": model_id}
+
+@router.get("/favourites", response_model=List[str])
+def list_favourites(
+    context: dict = Depends(deps.get_workspace_context)
+):
+    workspace_id = context["workspace_id"]
+    user_id = context["user"].user_id
+    favourites_col = db["catalogue_favourites"]
+    favourites = list(favourites_col.find({"user_id": user_id, "workspace_id": workspace_id}))
+    return [f["model_id"] for f in favourites]
