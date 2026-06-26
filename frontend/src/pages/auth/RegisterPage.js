@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { REGISTER } from '@/constants/testIds';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 
 const RegisterPage = () => {
   const [formData, setFormData] = useState({
@@ -19,7 +19,7 @@ const RegisterPage = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [validationError, setValidationError] = useState('');
-  const { register, loading, error } = useAuth();
+  const { register, login, loading, error } = useAuth();
   const navigate = useNavigate();
 
   const handleChange = (e) => {
@@ -36,10 +36,17 @@ const RegisterPage = () => {
 
     try {
       const { confirmPassword, ...registerData } = formData;
+      // 1. Register the user
       await register(registerData);
-      navigate('/login');
+
+      // 2. Automatically log them in for a better UX and E2E verification
+      await login(formData.email, formData.password);
+
+      // 3. Navigate to workspace selection/dashboard
+      navigate('/');
     } catch (err) {
-      // Error handled by context
+      console.error("Registration flow failed", err);
+      // Error is caught and displayed by AuthContext
     }
   };
 
@@ -131,7 +138,12 @@ const RegisterPage = () => {
               disabled={loading}
               data-testid={REGISTER.submitButton}
             >
-              {loading ? "Registering..." : "Register"}
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Processing...
+                </>
+              ) : "Register"}
             </Button>
             <div className="text-center text-sm">
               Already have an account?{' '}

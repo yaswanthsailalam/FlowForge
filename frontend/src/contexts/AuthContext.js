@@ -21,8 +21,12 @@ export const AuthProvider = ({ children }) => {
       setUser(userData);
     } catch (err) {
       console.error('Failed to load user', err);
-      localStorage.removeItem('token');
-      localStorage.removeItem('workspaceId');
+      // Only clear token if it's an authentication error
+      if (err.response?.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('workspaceId');
+        setUser(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -42,7 +46,8 @@ export const AuthProvider = ({ children }) => {
       setUser(userData);
       return userData;
     } catch (err) {
-      setError(err.response?.data?.detail || 'Login failed');
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Login failed. Please check your credentials.');
       throw err;
     } finally {
       setLoading(false);
@@ -53,9 +58,10 @@ export const AuthProvider = ({ children }) => {
     setError(null);
     setLoading(true);
     try {
-      await authService.register(userData);
+      return await authService.register(userData);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Registration failed');
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Registration failed. Email may already be in use.');
       throw err;
     } finally {
       setLoading(false);
