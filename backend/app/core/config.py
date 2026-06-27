@@ -1,6 +1,7 @@
 import os
-from typing import List, Union
-from pydantic_settings import BaseSettings
+import json
+from typing import List, Union, Any
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import AnyHttpUrl, field_validator
 
 class Settings(BaseSettings):
@@ -23,18 +24,28 @@ class Settings(BaseSettings):
     EMERGENT_LLM_KEY: Union[str, None] = os.environ.get("EMERGENT_LLM_KEY", None)
 
     # CORS
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
+    BACKEND_CORS_ORIGINS: Union[str, List[str]] = []
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> Union[List[str], str]:
+    def assemble_cors_origins(cls, v: Any) -> List[str]:
         if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
-            return v
+            return [i.strip().rstrip("/") for i in v.split(",") if i.strip()]
+        elif isinstance(v, str) and v.startswith("["):
+            try:
+                items = json.loads(v)
+                if isinstance(items, list):
+                    return [str(i).strip().rstrip("/") for i in items if str(i).strip()]
+            except json.JSONDecodeError:
+                pass
+            return [i.strip().strip("'\"").rstrip("/") for i in v.strip("[]").split(",") if i.strip()]
+        elif isinstance(v, list):
+            return [str(i).strip().rstrip("/") for i in v if str(i).strip()]
         return v
 
-    class Config:
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        case_sensitive=True,
+        env_ignore_empty=True,
+    )
 
 settings = Settings()
