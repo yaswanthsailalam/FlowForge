@@ -1,6 +1,7 @@
 import logging
 import sys
 from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo.errors import PyMongoError, ConnectionFailure, OperationFailure
 from backend.app.core.config import settings
 
 # Setup logging
@@ -20,7 +21,7 @@ def get_masked_url(url: str) -> str:
 logger.info(f"Connecting to MongoDB at {get_masked_url(settings.MONGO_URL)}")
 logger.info(f"Using database: {settings.DB_NAME}")
 
-client = MongoClient(settings.MONGO_URL)
+client = MongoClient(settings.MONGO_URL, serverSelectionTimeoutMS=5000)
 db = client[settings.DB_NAME]
 
 # Core Collections
@@ -42,7 +43,7 @@ application_catalogue_col = db["application_catalogue"]
 client_applications_col = db["client_applications"]
 support_access_requests_col = db["support_access_requests"]
 
-# Workflow Engine Collections (Preserved & Extended)
+# Workflow Engine Collections
 industries_col = db["industries"]
 business_segments_col = db["business_segments"]
 departments_col = db["departments"]
@@ -116,7 +117,16 @@ def init_db():
         model_reviews_col.create_index([("subject_id", ASCENDING), ("status", ASCENDING)])
 
         logger.info("Collection indexes initialized successfully")
+    except (ConnectionFailure, OperationFailure) as e:
+        logger.error(f"MongoDB connection/auth failed during init: {str(e)}")
+        raise e
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        # In a real environment we might want to fail hard here
-        # raise e
+        logger.error(f"Unexpected error during database initialization: {e}")
+        raise e
+
+def is_db_connected() -> bool:
+    try:
+        client.admin.command('ping')
+        return True
+    except Exception:
+        return False

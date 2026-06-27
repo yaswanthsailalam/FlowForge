@@ -36,6 +36,32 @@ export const AuthProvider = ({ children }) => {
     loadUser();
   }, [loadUser]);
 
+  const mapErrorMessage = (err) => {
+    const detail = err.response?.data?.detail;
+    if (typeof detail === 'string') {
+      switch (detail) {
+        case 'EMAIL_ALREADY_REGISTERED':
+          return 'An account with this email already exists.';
+        case 'DATABASE_UNAVAILABLE':
+          return 'Service is temporarily unavailable. Please try again later.';
+        case 'DATABASE_CONFIGURATION_ERROR':
+          return 'Internal service configuration error. Support has been notified.';
+        case 'INCORRECT_CREDENTIALS':
+          return 'Incorrect email or password.';
+        case 'INACTIVE_USER':
+          return 'Your account is inactive. Please contact support.';
+        default:
+          return detail;
+      }
+    }
+
+    if (err.message === 'Network Error') {
+        return 'Unable to reach the FlowForge service. Please check your connection.';
+    }
+
+    return null;
+  };
+
   const login = async (email, password) => {
     setError(null);
     setLoading(true);
@@ -46,8 +72,8 @@ export const AuthProvider = ({ children }) => {
       setUser(userData);
       return userData;
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Login failed. Please check your credentials.');
+      const message = mapErrorMessage(err) || 'Login failed. Please check your credentials.';
+      setError(message);
       throw err;
     } finally {
       setLoading(false);
@@ -60,8 +86,8 @@ export const AuthProvider = ({ children }) => {
     try {
       return await authService.register(userData);
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Registration failed. Email may already be in use.');
+      const message = mapErrorMessage(err) || 'Registration failed. Please try again.';
+      setError(message);
       throw err;
     } finally {
       setLoading(false);
