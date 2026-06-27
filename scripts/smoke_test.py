@@ -3,10 +3,16 @@ import sys
 import requests
 import uuid
 import time
+import secrets
+import string
 
 FRONTEND_URL = os.environ.get("FLOWFORGE_FRONTEND_URL")
 BACKEND_URL = os.environ.get("FLOWFORGE_BACKEND_URL")
 EMAIL_PREFIX = os.environ.get("FLOWFORGE_TEST_EMAIL_PREFIX", "smoke")
+
+def generate_secure_password(length=16):
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    return ''.join(secrets.choice(alphabet) for i in range(length))
 
 def test_flow():
     if not BACKEND_URL:
@@ -27,7 +33,7 @@ def test_flow():
 
     # 2. Registration
     user_email = f"{EMAIL_PREFIX}-{uuid.uuid4().hex[:8]}@test.com"
-    password = "SecurePassword123!"
+    password = generate_secure_password()
     try:
         res = requests.post(f"{BACKEND_URL}/api/auth/register", json={
             "email": user_email,
@@ -52,10 +58,6 @@ def test_flow():
     except Exception as e:
         print(f"FAIL: Login - {e}")
         sys.exit(1)
-
-    # 4. Create Process Model
-    headers = {"Authorization": f"Bearer {token}", "X-Workspace-Id": "placeholder"}
-    # Note: In a real test, we would first create a workspace
 
     print("Smoke test reached end of implemented automated steps.")
     print("SUCCESS: Core authentication and health verified.")
