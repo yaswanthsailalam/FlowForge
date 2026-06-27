@@ -28,7 +28,21 @@ users_col = db["users"]
 workspaces_col = db["workspaces"]
 workspace_memberships_col = db["workspace_memberships"]
 
-# Workflow Engine Collections (Preserved)
+# Platform & Organisation Collections
+platform_role_assignments_col = db["platform_role_assignments"]
+client_organisations_col = db["client_organisations"]
+products_col = db["products"]
+product_modules_col = db["product_modules"]
+product_features_col = db["product_features"]
+plans_col = db["plans"]
+client_entitlements_col = db["client_entitlements"]
+service_catalogue_col = db["service_catalogue"]
+service_engagements_col = db["service_engagements"]
+application_catalogue_col = db["application_catalogue"]
+client_applications_col = db["client_applications"]
+support_access_requests_col = db["support_access_requests"]
+
+# Workflow Engine Collections (Preserved & Extended)
 industries_col = db["industries"]
 business_segments_col = db["business_segments"]
 departments_col = db["departments"]
@@ -47,6 +61,7 @@ audit_events_col = db["audit_events"]
 notifications_col = db["notifications"]
 roles_col = db["roles"]
 permissions_col = db["permissions"]
+model_reviews_col = db["model_reviews"]
 
 def init_db():
     try:
@@ -66,12 +81,26 @@ def init_db():
         )
         workspace_memberships_col.create_index([("user_id", ASCENDING)])
 
+        # Platform Indexes
+        platform_role_assignments_col.create_index([("user_id", ASCENDING), ("role", ASCENDING)], unique=True)
+        client_organisations_col.create_index([("org_id", ASCENDING)], unique=True)
+        client_organisations_col.create_index([("slug", ASCENDING)], unique=True)
+
+        products_col.create_index([("product_id", ASCENDING)], unique=True)
+        plans_col.create_index([("plan_id", ASCENDING)], unique=True)
+
+        client_entitlements_col.create_index([("client_id", ASCENDING)])
+        service_engagements_col.create_index([("client_id", ASCENDING)])
+        client_applications_col.create_index([("client_id", ASCENDING)])
+
         # Preserved Engine Indexes
         process_models_col.create_index([("catalogue_status", ASCENDING)])
         process_models_col.create_index([("applicable_departments", ASCENDING)])
         process_models_col.create_index([("applicable_families", ASCENDING)])
         process_models_col.create_index([("tags", ASCENDING)])
         process_models_col.create_index([("workspace_id", ASCENDING)])
+        process_models_col.create_index([("model_id", ASCENDING), ("version", DESCENDING)])
+
         workflows_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
         workflow_versions_col.create_index([("workflow_id", ASCENDING), ("version", DESCENDING)])
         workflow_runs_col.create_index([("workspace_id", ASCENDING), ("status", ASCENDING)])
@@ -83,6 +112,8 @@ def init_db():
         audit_events_col.create_index([("workspace_id", ASCENDING), ("timestamp", DESCENDING)])
         audit_events_col.create_index([("entity_type", ASCENDING), ("entity_id", ASCENDING)])
         audit_events_col.create_index([("run_id", ASCENDING)])
+
+        model_reviews_col.create_index([("subject_id", ASCENDING), ("status", ASCENDING)])
 
         logger.info("Collection indexes initialized successfully")
     except Exception as e:
