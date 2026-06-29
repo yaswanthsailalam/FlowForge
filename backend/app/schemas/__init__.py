@@ -1,12 +1,27 @@
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
+from enum import Enum
+
+class PlatformRole(str, Enum):
+    PLATFORM_OWNER = "platform_owner"
+    PLATFORM_ADMIN = "platform_admin"
+    PLATFORM_PRODUCT_ADMIN = "platform_product_admin"
+    PLATFORM_CLIENT_SUCCESS_ADMIN = "platform_client_success_admin"
+    PLATFORM_SERVICE_MANAGER = "platform_service_manager"
+    PLATFORM_CATALOGUE_ADMIN = "platform_catalogue_admin"
+    PLATFORM_REVIEWER = "platform_reviewer"
+    PLATFORM_SUPPORT_OPERATOR = "platform_support_operator"
+    PLATFORM_SECURITY_AUDITOR = "platform_security_auditor"
+    PLATFORM_VIEWER = "platform_viewer"
 
 # Shared properties
 class UserBase(BaseModel):
     email: Optional[EmailStr] = None
     is_active: Optional[bool] = True
     full_name: Optional[str] = None
+    is_platform_admin: bool = False
+    platform_role: Optional[PlatformRole] = None
 
 # Properties to receive via API on creation
 class UserCreate(UserBase):

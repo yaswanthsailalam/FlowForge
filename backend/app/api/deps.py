@@ -1,4 +1,4 @@
-from typing import Generator, Optional
+from typing import Generator, Optional, List
 from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt
@@ -7,7 +7,10 @@ from pydantic import ValidationError
 from backend.app.core import security
 from backend.app.core.config import settings
 from backend.app.core.utils import serialize_doc
-from backend.app.db.mongodb import users_col, workspaces_col, workspace_memberships_col
+from backend.app.db.mongodb import (
+    users_col, workspaces_col, workspace_memberships_col,
+    platform_role_assignments_col
+)
 from backend.app.schemas import TokenPayload, User, WorkspaceMembership
 
 reusable_oauth2 = OAuth2PasswordBearer(
@@ -98,3 +101,25 @@ def require_poc_enabled():
             status_code=status.HTTP_404_NOT_FOUND,
             detail="POC endpoints are not enabled in this environment"
         )
+
+def require_platform_role(required_roles: List[str]):
+    """
+    Dependency to check if the current user has at least one of the required platform roles.
+    """
+    def role_checker(current_user: User = Depends(get_current_user)):
+        assignments = list(platform_role_assignments_col.find({"user_id": current_user.user_id}))
+        user_roles = [a["role"] for a in assignments]
+
+        if not any(role in required_roles for role in user_roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User does not have required platform permissions"
+            )
+        return current_user
+    return role_checker
+
+# Platform Role Shortcuts
+require_platform_admin = require_platform_role(["platform_owner", "platform_admin"])
+require_product_admin = require_platform_role(["platform_owner", "platform_product_admin"])
+require_catalogue_admin = require_platform_role(["platform_owner", "platform_catalogue_admin"])
+require_support_admin = require_platform_role(["platform_owner", "platform_support_operator", "platform_client_success_admin"])

@@ -5,20 +5,18 @@ from math import ceil
 from backend.app.api import deps
 from backend.app.core.utils import utcnow, new_id, serialize_doc
 from backend.app.db.mongodb import (
-    industries_col, business_segments_col, departments_col,
-    teams_col, process_families_col, process_models_col,
-    model_variants_col, workflow_templates_col
+    process_models_col, model_variants_col, workflow_templates_col, db
 )
 from backend.app.schemas.catalogue import (
-    IndustryInDB, BusinessSegmentInDB, DepartmentInDB,
-    TeamInDB, ProcessFamilyInDB, ProcessModelInDB,
-    ModelVariantInDB, WorkflowTemplateInDB, ProcessModelListResponse,
-    CataloguePagination, ProcessModelCreate, ProcessModelUpdate,
-    ModelVariantCreate, ModelVariantUpdate,
-    WorkflowTemplateCreate, WorkflowTemplateUpdate
+    ProcessModelCreate, ProcessModelUpdate, ProcessModelInDB,
+    ModelReviewSubmit, ModelReviewDecision, ModelReviewInDB,
+    ProcessModelListResponse, ModelVariantInDB, WorkflowTemplateInDB
 )
+from backend.app.core.governance import validate_variant_against_policy, ExtensionPolicyViolation
 
 router = APIRouter()
+
+reviews_col = db["model_reviews"]
 
 # --- Helper for pagination ---
 def paginate_results(collection, query, page, page_size):
@@ -38,205 +36,203 @@ def paginate_results(collection, query, page, page_size):
         }
     }
 
-# --- Industries ---
-@router.get("/industries", response_model=List[IndustryInDB])
-def list_industries(
-    context: dict = Depends(deps.get_workspace_context)
-):
-    """List all global or workspace-specific industries."""
-    workspace_id = context["workspace_id"]
-    query = {"$or": [{"source_type": "global"}, {"workspace_id": workspace_id}]}
-    industries = list(industries_col.find(query))
-    return serialize_doc(industries)
-
-# --- Business Segments ---
-@router.get("/business-segments", response_model=List[BusinessSegmentInDB])
-def list_business_segments(
-    industry_id: Optional[str] = None,
-    context: dict = Depends(deps.get_workspace_context)
-):
-    """List business segments, optionally filtered by industry."""
-    workspace_id = context["workspace_id"]
-    query = {"$or": [{"source_type": "global"}, {"workspace_id": workspace_id}]}
-    if industry_id:
-        query["industry_ids"] = industry_id
-    segments = list(business_segments_col.find(query))
-    return serialize_doc(segments)
-
-# --- Departments ---
-@router.get("/departments", response_model=List[DepartmentInDB])
-def list_departments(
-    context: dict = Depends(deps.get_workspace_context)
-):
-    """List departments for the current workspace."""
-    workspace_id = context["workspace_id"]
-    query = {"workspace_id": workspace_id}
-    departments = list(departments_col.find(query))
-    return serialize_doc(departments)
-
-# --- Teams ---
-@router.get("/teams", response_model=List[TeamInDB])
-def list_teams(
-    department_id: Optional[str] = None,
-    context: dict = Depends(deps.get_workspace_context)
-):
-    """List teams, optionally filtered by department."""
-    workspace_id = context["workspace_id"]
-    query = {"workspace_id": workspace_id}
-    if department_id:
-        query["department_id"] = department_id
-    teams = list(teams_col.find(query))
-    return serialize_doc(teams)
-
-# --- Process Families ---
-@router.get("/process-families", response_model=List[ProcessFamilyInDB])
-def list_process_families(
-    context: dict = Depends(deps.get_workspace_context)
-):
-    """List process families."""
-    workspace_id = context["workspace_id"]
-    query = {"$or": [{"source_type": "global"}, {"workspace_id": workspace_id}]}
-    families = list(process_families_col.find(query))
-    return serialize_doc(families)
-
-# --- Process Models ---
 @router.get("/process-models", response_model=ProcessModelListResponse)
-def list_process_models(
+def list_models(
     search: Optional[str] = Query(None),
-    industry: Optional[str] = Query(None),
-    segment: Optional[str] = Query(None),
-    department: Optional[str] = Query(None),
-    team: Optional[str] = Query(None),
-    family: Optional[str] = Query(None),
-    source_type: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
     tag: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     context: dict = Depends(deps.get_workspace_context)
 ):
-    """List process models with extensive filtering and search."""
     workspace_id = context["workspace_id"]
-
-    # Base query: global or workspace-specific
     query = {"$or": [
-        {"source_type": "global", "catalogue_status": "published"},
+        {"source_type": "global", "$or": [{"lifecycle_status": "published"}, {"catalogue_status": "published"}]},
         {"workspace_id": workspace_id}
     ]}
 
     if search:
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"description": {"$regex": search, "$options": "i"}},
-            {"tags": {"$regex": search, "$options": "i"}}
-        ]
-        # Re-add visibility/ownership constraints if search overrides top-level $or
         query["$and"] = [{"$or": [
-            {"source_type": "global", "catalogue_status": "published"},
-            {"workspace_id": workspace_id}
+            {"name": {"$regex": search, "$options": "i"}},
+            {"description": {"$regex": search, "$options": "i"}}
         ]}]
 
-    if industry:
-        query["applicable_industries"] = industry
-    if segment:
-        query["applicable_segments"] = segment
-    if department:
-        query["applicable_departments"] = department
-    if team:
-        query["applicable_teams"] = team
-    if family:
-        query["applicable_families"] = family
-    if source_type:
-        query["source_type"] = source_type
-    if status:
-        query["catalogue_status"] = status
     if tag:
         query["tags"] = tag
 
     return paginate_results(process_models_col, query, page, page_size)
 
 @router.post("/process-models", response_model=ProcessModelInDB)
-def create_process_model(
+def create_model(
     model_in: ProcessModelCreate,
-    context: dict = Depends(deps.require_architect)
+    context: dict = Depends(deps.get_workspace_context)
 ):
-    """Create a new workspace-specific process model."""
+    user = context["user"]
     workspace_id = context["workspace_id"]
+    source_type = "workspace" if workspace_id else "global"
+
+    if source_type == "global" and not user.is_platform_admin:
+        raise HTTPException(status_code=403, detail="Only platform admins can create global models")
+
+    if model_in.parent_model_id:
+        parent = process_models_col.find_one({"model_id": model_in.parent_model_id})
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent model not found")
+        try:
+            validate_variant_against_policy(parent, model_in.model_dump())
+        except ExtensionPolicyViolation as e:
+            raise HTTPException(status_code=400, detail={"message": e.message, "violations": e.violations})
 
     model = model_in.model_dump()
     model["model_id"] = new_id()
+    model["source_type"] = source_type
     model["workspace_id"] = workspace_id
-    model["source_type"] = "workspace"
-    model["ownership_scope"] = "workspace"
+    model["lifecycle_status"] = "draft"
     model["catalogue_status"] = "draft"
-    model["publication_status"] = "draft"
-    model["model_owner"] = context["user"].user_id
+    model["is_published"] = False
     model["created_at"] = utcnow()
     model["updated_at"] = utcnow()
+    model["created_by"] = user.user_id
 
     process_models_col.insert_one(model)
     return serialize_doc(model)
 
 @router.get("/process-models/{model_id}", response_model=ProcessModelInDB)
-def get_process_model(
+def get_model(
     model_id: str,
     context: dict = Depends(deps.get_workspace_context)
 ):
-    """Get details of a specific process model."""
-    workspace_id = context["workspace_id"]
     model = process_models_col.find_one({"model_id": model_id})
-
     if not model:
         raise HTTPException(status_code=404, detail="Process model not found")
 
-    # Security check: must be global or belong to this workspace
-    if model.get("source_type") != "global" and model.get("workspace_id") != workspace_id:
-        raise HTTPException(status_code=403, detail="Access denied to this process model")
+    if model["source_type"] == "workspace" and model["workspace_id"] != context["workspace_id"]:
+        raise HTTPException(status_code=403, detail="Access denied to this workspace model")
 
     return serialize_doc(model)
 
 @router.patch("/process-models/{model_id}", response_model=ProcessModelInDB)
-def update_process_model(
+def update_model(
     model_id: str,
     model_in: ProcessModelUpdate,
-    context: dict = Depends(deps.require_architect)
+    context: dict = Depends(deps.get_workspace_context)
 ):
-    """Update a workspace-specific process model."""
-    workspace_id = context["workspace_id"]
-    model = process_models_col.find_one({"model_id": model_id, "workspace_id": workspace_id})
-
+    model = process_models_col.find_one({"model_id": model_id})
     if not model:
-        raise HTTPException(status_code=404, detail="Process model not found or not in this workspace")
+        raise HTTPException(status_code=404, detail="Process model not found")
 
-    if model.get("catalogue_status") == "published" and not model_in.catalogue_status:
-        # Require versioning for published models
-        # In a real system we might create a new version here.
-        # For this task, we'll allow updates but note the requirement.
-        pass
+    if model.get("is_published"):
+        raise HTTPException(status_code=409, detail="Published models are immutable. Please create a new draft version.")
+
+    if model["source_type"] == "global" and not context["user"].is_platform_admin:
+        raise HTTPException(status_code=403, detail="Only platform admins can edit global models")
+    if model["source_type"] == "workspace" and model["workspace_id"] != context["workspace_id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if model.get("parent_model_id"):
+        parent = process_models_col.find_one({"model_id": model["parent_model_id"]})
+        if parent:
+            merged_data = model.copy()
+            merged_data.update(model_in.model_dump(exclude_unset=True))
+            try:
+                validate_variant_against_policy(parent, merged_data)
+            except ExtensionPolicyViolation as e:
+                raise HTTPException(status_code=400, detail={"message": e.message, "violations": e.violations})
 
     update_data = model_in.model_dump(exclude_unset=True)
     update_data["updated_at"] = utcnow()
 
-    process_models_col.update_one({"model_id": model_id}, {"$set": update_data})
+    if model["lifecycle_status"] == "changes_requested":
+         update_data["lifecycle_status"] = "draft"
 
-    updated_model = process_models_col.find_one({"model_id": model_id})
-    return serialize_doc(updated_model)
+    process_models_col.update_one({"model_id": model_id}, {"$set": update_data})
+    return serialize_doc(process_models_col.find_one({"model_id": model_id}))
+
+@router.post("/process-models/{model_id}/submit-review", response_model=ModelReviewInDB)
+def submit_for_review(
+    model_id: str,
+    review_in: ModelReviewSubmit,
+    context: dict = Depends(deps.get_workspace_context)
+):
+    model = process_models_col.find_one({"model_id": model_id})
+    if not model or model.get("is_published"):
+         raise HTTPException(status_code=400, detail="Invalid model for review")
+
+    if model["lifecycle_status"] not in ["draft", "changes_requested"]:
+        raise HTTPException(status_code=400, detail=f"Cannot submit model in '{model['lifecycle_status']}' status")
+
+    review = {
+        "review_id": new_id(),
+        "model_id": model_id,
+        "model_version": model["version"],
+        "submitted_by": context["user"].user_id,
+        "submitted_at": utcnow(),
+        "status": "pending",
+        "comments": review_in.comments
+    }
+
+    reviews_col.insert_one(review)
+    process_models_col.update_one({"model_id": model_id}, {"$set": {"lifecycle_status": "in_review"}})
+
+    return serialize_doc(review)
+
+@router.post("/process-models/{model_id}/decision", response_model=ModelReviewInDB)
+def decide_review(
+    model_id: str,
+    decision_in: ModelReviewDecision,
+    context: dict = Depends(deps.get_workspace_context)
+):
+    model = process_models_col.find_one({"model_id": model_id})
+    review = reviews_col.find_one({"model_id": model_id, "status": "pending"})
+
+    if not model or not review:
+        raise HTTPException(status_code=404, detail="No pending review found for this model")
+
+    if model["source_type"] == "global" and not context["user"].is_platform_admin:
+        raise HTTPException(status_code=403, detail="Only platform admins can decide on global reviews")
+
+    status_map = {
+        "approved": "approved",
+        "changes_requested": "changes_requested",
+        "rejected": "archived"
+    }
+
+    new_status = status_map.get(decision_in.decision)
+    if not new_status:
+        raise HTTPException(status_code=400, detail="Invalid decision")
+
+    reviews_col.update_one(
+        {"review_id": review["review_id"]},
+        {"$set": {
+            "status": decision_in.decision,
+            "decided_by": context["user"].user_id,
+            "decided_at": utcnow(),
+            "comments": decision_in.comments
+        }}
+    )
+
+    process_models_col.update_one({"model_id": model_id}, {"$set": {"lifecycle_status": new_status}})
+
+    return serialize_doc(reviews_col.find_one({"review_id": review["review_id"]}))
 
 @router.post("/process-models/{model_id}/publish", response_model=ProcessModelInDB)
-def publish_process_model(
+def publish_model(
     model_id: str,
-    context: dict = Depends(deps.require_architect)
+    context: dict = Depends(deps.get_workspace_context)
 ):
-    """Publish a process model."""
-    workspace_id = context["workspace_id"]
-    model = process_models_col.find_one({"model_id": model_id, "workspace_id": workspace_id})
-
+    model = process_models_col.find_one({"model_id": model_id})
     if not model:
-        raise HTTPException(status_code=404, detail="Process model not found")
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    if model["lifecycle_status"] != "approved":
+        raise HTTPException(status_code=400, detail="Model must be approved before publication")
+
+    if model["source_type"] == "global" and not context["user"].is_platform_admin:
+        raise HTTPException(status_code=403, detail="Only platform admins can publish global models")
 
     update_data = {
+        "lifecycle_status": "published",
         "catalogue_status": "published",
-        "publication_status": "published",
+        "is_published": True,
         "published_at": utcnow(),
         "updated_at": utcnow()
     }
@@ -244,167 +240,77 @@ def publish_process_model(
     process_models_col.update_one({"model_id": model_id}, {"$set": update_data})
     return serialize_doc(process_models_col.find_one({"model_id": model_id}))
 
-@router.post("/process-models/{model_id}/archive", response_model=ProcessModelInDB)
-def archive_process_model(
+@router.post("/process-models/{model_id}/deprecate", response_model=ProcessModelInDB)
+def deprecate_model(
     model_id: str,
-    context: dict = Depends(deps.require_architect)
+    context: dict = Depends(deps.get_workspace_context)
 ):
-    """Archive a process model."""
-    workspace_id = context["workspace_id"]
-    model = process_models_col.find_one({"model_id": model_id, "workspace_id": workspace_id})
+    model = process_models_col.find_one({"model_id": model_id})
+    if not model or not model.get("is_published"):
+        raise HTTPException(status_code=400, detail="Only published models can be deprecated")
 
-    if not model:
-        raise HTTPException(status_code=404, detail="Process model not found")
+    if model["source_type"] == "global" and not context["user"].is_platform_admin:
+        raise HTTPException(status_code=403, detail="Only platform admins can deprecate global models")
 
-    update_data = {
-        "catalogue_status": "archived",
-        "archived_at": utcnow(),
-        "updated_at": utcnow()
-    }
-
-    process_models_col.update_one({"model_id": model_id}, {"$set": update_data})
+    process_models_col.update_one({"model_id": model_id}, {"$set": {"lifecycle_status": "deprecated", "updated_at": utcnow()}})
     return serialize_doc(process_models_col.find_one({"model_id": model_id}))
 
-# --- Model Variants ---
-@router.get("/process-models/{model_id}/variants", response_model=List[ModelVariantInDB])
-def list_model_variants(
+@router.post("/process-models/{model_id}/archive", response_model=ProcessModelInDB)
+def archive_model(
     model_id: str,
     context: dict = Depends(deps.get_workspace_context)
 ):
-    """List variants for a process model."""
-    workspace_id = context["workspace_id"]
-
-    # Ensure parent model is accessible
     model = process_models_col.find_one({"model_id": model_id})
-    if not model or (model.get("source_type") != "global" and model.get("workspace_id") != workspace_id):
-        raise HTTPException(status_code=404, detail="Process model not found")
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
 
-    query = {"model_id": model_id, "$or": [{"workspace_id": None}, {"workspace_id": workspace_id}]}
-    variants = list(model_variants_col.find(query))
-    return serialize_doc(variants)
+    if model["source_type"] == "global" and not context["user"].is_platform_admin:
+        raise HTTPException(status_code=403, detail="Only platform admins can archive global models")
 
-@router.post("/variants", response_model=ModelVariantInDB)
-def create_variant(
-    variant_in: ModelVariantCreate,
-    context: dict = Depends(deps.require_architect)
-):
-    """Create a new model variant."""
-    workspace_id = context["workspace_id"]
+    process_models_col.update_one({"model_id": model_id}, {"$set": {"lifecycle_status": "archived", "updated_at": utcnow(), "archived_at": utcnow()}})
+    return serialize_doc(process_models_col.find_one({"model_id": model_id}))
 
-    # Ensure parent model is accessible
-    model = process_models_col.find_one({"model_id": variant_in.model_id})
-    if not model or (model.get("source_type") != "global" and model.get("workspace_id") != workspace_id):
-        raise HTTPException(status_code=404, detail="Base process model not found")
-
-    variant = variant_in.model_dump()
-    variant["variant_id"] = new_id()
-    variant["workspace_id"] = workspace_id
-    variant["created_at"] = utcnow()
-    variant["updated_at"] = utcnow()
-
-    model_variants_col.insert_one(variant)
-    return serialize_doc(variant)
-
-@router.get("/variants/{variant_id}", response_model=ModelVariantInDB)
-def get_variant(
-    variant_id: str,
+@router.post("/process-models/{model_id}/clone", response_model=ProcessModelInDB)
+def clone_published_model(
+    model_id: str,
     context: dict = Depends(deps.get_workspace_context)
 ):
-    """Get details of a specific model variant."""
-    workspace_id = context["workspace_id"]
-    variant = model_variants_col.find_one({"variant_id": variant_id})
+    model = process_models_col.find_one({"model_id": model_id})
+    if not model or not model.get("is_published"):
+        raise HTTPException(status_code=400, detail="Only published models can be cloned for versioning")
 
-    if not variant:
-        raise HTTPException(status_code=404, detail="Variant not found")
+    new_model = model.copy()
+    new_model.pop("_id")
+    new_model["model_id"] = new_id()
+    new_model["parent_model_id"] = model_id
+    new_model["parent_version"] = model["version"]
+    new_model["lifecycle_status"] = "draft"
+    new_model["catalogue_status"] = "draft"
+    new_model["is_published"] = False
+    new_model["created_at"] = utcnow()
+    new_model["updated_at"] = utcnow()
+    new_model["created_by"] = context["user"].user_id
 
-    if variant.get("workspace_id") and variant.get("workspace_id") != workspace_id:
-        raise HTTPException(status_code=403, detail="Access denied to this variant")
+    v_parts = model["version"].split('.')
+    v_parts[-1] = str(int(v_parts[-1]) + 1)
+    new_model["version"] = '.'.join(v_parts)
 
-    return serialize_doc(variant)
+    process_models_col.insert_one(new_model)
+    return serialize_doc(new_model)
 
-# --- Workflow Templates ---
-@router.get("/workflow-templates", response_model=List[WorkflowTemplateInDB])
-def list_workflow_templates(
-    model_id: Optional[str] = None,
-    variant_id: Optional[str] = None,
-    context: dict = Depends(deps.get_workspace_context)
-):
-    """List workflow templates."""
-    workspace_id = context["workspace_id"]
-    query = {"$or": [{"source_type": "global"}, {"workspace_id": workspace_id}]}
-
-    if model_id:
-        query["process_model_id"] = model_id
-    if variant_id:
-        query["variant_id"] = variant_id
-
-    templates = list(workflow_templates_col.find(query))
-    return serialize_doc(templates)
-
-@router.post("/workflow-templates", response_model=WorkflowTemplateInDB)
-def create_workflow_template(
-    template_in: WorkflowTemplateCreate,
-    context: dict = Depends(deps.require_architect)
-):
-    """Create a new workflow template."""
-    workspace_id = context["workspace_id"]
-
-    # Ensure parent model is accessible
-    model = process_models_col.find_one({"model_id": template_in.process_model_id})
-    if not model or (model.get("source_type") != "global" and model.get("workspace_id") != workspace_id):
-        raise HTTPException(status_code=404, detail="Process model not found")
-
-    template = template_in.model_dump()
-    template["template_id"] = new_id()
-    template["workspace_id"] = workspace_id
-    template["source_type"] = "workspace"
-    template["created_at"] = utcnow()
-    template["updated_at"] = utcnow()
-
-    workflow_templates_col.insert_one(template)
-    return serialize_doc(template)
-
-@router.get("/workflow-templates/{template_id}", response_model=WorkflowTemplateInDB)
-def get_workflow_template(
-    template_id: str,
-    context: dict = Depends(deps.get_workspace_context)
-):
-    """Get details of a specific workflow template."""
-    workspace_id = context["workspace_id"]
-    template = workflow_templates_col.find_one({"template_id": template_id})
-
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
-
-    if template.get("workspace_id") and template.get("workspace_id") != workspace_id:
-        raise HTTPException(status_code=403, detail="Access denied to this template")
-
-    return serialize_doc(template)
-
-# --- Favourites ---
 @router.post("/process-models/{model_id}/favourite")
 def favourite_process_model(
     model_id: str,
     context: dict = Depends(deps.get_workspace_context)
 ):
-    """Add a process model to favourites."""
     workspace_id = context["workspace_id"]
     user_id = context["user"].user_id
-
-    # Ensure model exists and is accessible
-    model = process_models_col.find_one({"model_id": model_id})
-    if not model or (model.get("source_type") != "global" and model.get("workspace_id") != workspace_id):
-        raise HTTPException(status_code=404, detail="Process model not found")
-
-    # We'll use a 'favourites' collection or similar.
-    # For now, let's just use the existing db and a new collection name implicitly.
-    from backend.app.db.mongodb import db
     favourites_col = db["catalogue_favourites"]
 
     existing = favourites_col.find_one({"user_id": user_id, "workspace_id": workspace_id, "model_id": model_id})
     if existing:
         favourites_col.delete_one({"_id": existing["_id"]})
-        return {"favourited": False}
+        return {"favourited": False, "model_id": model_id}
     else:
         favourites_col.insert_one({
             "user_id": user_id,
@@ -412,18 +318,43 @@ def favourite_process_model(
             "model_id": model_id,
             "created_at": utcnow()
         })
-        return {"favourited": True}
+        return {"favourited": True, "model_id": model_id}
 
 @router.get("/favourites", response_model=List[str])
 def list_favourites(
     context: dict = Depends(deps.get_workspace_context)
 ):
-    """List IDs of favourited process models."""
     workspace_id = context["workspace_id"]
     user_id = context["user"].user_id
-
-    from backend.app.db.mongodb import db
     favourites_col = db["catalogue_favourites"]
-
     favourites = list(favourites_col.find({"user_id": user_id, "workspace_id": workspace_id}))
     return [f["model_id"] for f in favourites]
+
+# --- Related Resources ---
+
+@router.get("/process-models/{model_id}/variants", response_model=List[ModelVariantInDB])
+def list_model_variants(
+    model_id: str,
+    context: dict = Depends(deps.get_workspace_context)
+):
+    """List organisation variants for a process model."""
+    workspace_id = context["workspace_id"]
+    # We show variants that belong to the current workspace
+    query = {"model_id": model_id, "workspace_id": workspace_id}
+    variants = list(model_variants_col.find(query))
+    return serialize_doc(variants)
+
+@router.get("/workflow-templates", response_model=List[WorkflowTemplateInDB])
+def list_workflow_templates(
+    model_id: Optional[str] = Query(None),
+    context: dict = Depends(deps.get_workspace_context)
+):
+    """List workflow templates, optionally filtered by process model."""
+    workspace_id = context["workspace_id"]
+    # Show global templates OR templates in the current workspace
+    query = {"$or": [{"source_type": "global"}, {"workspace_id": workspace_id}]}
+    if model_id:
+        query["process_model_id"] = model_id
+
+    templates = list(workflow_templates_col.find(query))
+    return serialize_doc(templates)
