@@ -22,40 +22,6 @@ const ProcessModelDetailPage = () => {
   const [error, setError] = useState(null);
   const [relatedError, setRelatedError] = useState(null);
 
-  const fetchModelData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const modelRes = await catalogueService.getProcessModel(modelId);
-
-      // Basic normalization to prevent crashes
-      const modelData = modelRes.data || {};
-      setModel({
-        ...modelData,
-        applicable_industries: modelData.applicable_industries || [],
-        applicable_departments: modelData.applicable_departments || [],
-        tags: modelData.tags || [],
-        expected_stages: modelData.expected_stages || [],
-        suggested_roles: modelData.suggested_roles || [],
-        approval_points: modelData.approval_points || []
-      });
-
-      // Load related data independently
-      fetchRelatedData();
-    } catch (err) {
-      console.error("Failed to fetch model details", err);
-      if (err.response?.status === 404) {
-        setError("Process Model not found.");
-      } else if (err.response?.status === 403) {
-        setError("You do not have permission to view this process model.");
-      } else {
-        setError("Failed to load model details. Please check your connection and try again.");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [modelId]);
-
   const fetchRelatedData = useCallback(async () => {
     setLoadingRelated(true);
     setRelatedError(null);
@@ -91,6 +57,40 @@ const ProcessModelDetailPage = () => {
       setLoadingRelated(false);
     }
   }, [modelId]);
+
+  const fetchModelData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const modelRes = await catalogueService.getProcessModel(modelId);
+
+      // Basic normalization to prevent crashes
+      const modelData = modelRes.data || {};
+      setModel({
+        ...modelData,
+        applicable_industries: modelData.applicable_industries || [],
+        applicable_departments: modelData.applicable_departments || [],
+        tags: modelData.tags || [],
+        expected_stages: modelData.expected_stages || [],
+        suggested_roles: modelData.suggested_roles || [],
+        approval_points: modelData.approval_points || []
+      });
+
+      // Load related data independently
+      fetchRelatedData();
+    } catch (err) {
+      console.error("Failed to fetch model details", err);
+      if (err.response?.status === 404) {
+        setError("Process Model not found.");
+      } else if (err.response?.status === 403) {
+        setError("You do not have permission to view this process model.");
+      } else {
+        setError("Failed to load model details. Please check your connection and try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [modelId, fetchRelatedData]);
 
   useEffect(() => {
     if (modelId) {
