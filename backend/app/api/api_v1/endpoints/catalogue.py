@@ -5,12 +5,12 @@ from math import ceil
 from backend.app.api import deps
 from backend.app.core.utils import utcnow, new_id, serialize_doc
 from backend.app.db.mongodb import (
-    process_models_col, db
+    process_models_col, model_variants_col, workflow_templates_col, db
 )
 from backend.app.schemas.catalogue import (
     ProcessModelCreate, ProcessModelUpdate, ProcessModelInDB,
     ModelReviewSubmit, ModelReviewDecision, ModelReviewInDB,
-    ProcessModelListResponse
+    ProcessModelListResponse, ModelVariantInDB, WorkflowTemplateInDB
 )
 from backend.app.core.governance import validate_variant_against_policy, ExtensionPolicyViolation
 
@@ -329,3 +329,32 @@ def list_favourites(
     favourites_col = db["catalogue_favourites"]
     favourites = list(favourites_col.find({"user_id": user_id, "workspace_id": workspace_id}))
     return [f["model_id"] for f in favourites]
+
+# --- Related Resources ---
+
+@router.get("/process-models/{model_id}/variants", response_model=List[ModelVariantInDB])
+def list_model_variants(
+    model_id: str,
+    context: dict = Depends(deps.get_workspace_context)
+):
+    """List organisation variants for a process model."""
+    workspace_id = context["workspace_id"]
+    # We show variants that belong to the current workspace
+    query = {"model_id": model_id, "workspace_id": workspace_id}
+    variants = list(model_variants_col.find(query))
+    return serialize_doc(variants)
+
+@router.get("/workflow-templates", response_model=List[WorkflowTemplateInDB])
+def list_workflow_templates(
+    model_id: Optional[str] = Query(None),
+    context: dict = Depends(deps.get_workspace_context)
+):
+    """List workflow templates, optionally filtered by process model."""
+    workspace_id = context["workspace_id"]
+    # Show global templates OR templates in the current workspace
+    query = {"$or": [{"source_type": "global"}, {"workspace_id": workspace_id}]}
+    if model_id:
+        query["process_model_id"] = model_id
+
+    templates = list(workflow_templates_col.find(query))
+    return serialize_doc(templates)

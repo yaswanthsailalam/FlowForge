@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import catalogueService from '@/services/catalogueService';
 import ModelDetailsView from '@/components/catalogue/ModelDetailsView';
 import { Button } from '@/components/ui/button';
-import { Loader2, ArrowLeft, Edit, Archive, CheckCircle, Layers, Layout, ChevronRight, RefreshCcw, ShieldAlert } from 'lucide-react';
+import { Loader2, ArrowLeft, Edit, Archive, CheckCircle, Layers, Layout, ChevronRight, RefreshCcw, ShieldAlert, AlertCircle } from 'lucide-react';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Link } from 'react-router-dom';
@@ -16,18 +16,17 @@ const ProcessModelDetailPage = () => {
   const [model, setModel] = useState(null);
   const [variants, setVariants] = useState([]);
   const [templates, setTemplates] = useState([]);
+
   const [loading, setLoading] = useState(true);
+  const [loadingRelated, setLoadingRelated] = useState(false);
   const [error, setError] = useState(null);
+  const [relatedError, setRelatedError] = useState(null);
 
   const fetchModelData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [modelRes, variantsRes, templatesRes] = await Promise.all([
-        catalogueService.getProcessModel(modelId),
-        catalogueService.getVariants(modelId),
-        catalogueService.getWorkflowTemplates({ model_id: modelId })
-      ]);
+      const modelRes = await catalogueService.getProcessModel(modelId);
 
       // Basic normalization to prevent crashes
       const modelData = modelRes.data || {};
@@ -41,8 +40,8 @@ const ProcessModelDetailPage = () => {
         approval_points: modelData.approval_points || []
       });
 
-      setVariants(variantsRes.data || []);
-      setTemplates(templatesRes.data || []);
+      // Load related data independently
+      fetchRelatedData();
     } catch (err) {
       console.error("Failed to fetch model details", err);
       if (err.response?.status === 404) {
@@ -54,6 +53,42 @@ const ProcessModelDetailPage = () => {
       }
     } finally {
       setLoading(false);
+    }
+  }, [modelId]);
+
+  const fetchRelatedData = useCallback(async () => {
+    setLoadingRelated(true);
+    setRelatedError(null);
+    try {
+      const results = await Promise.allSettled([
+        catalogueService.getVariants(modelId),
+        catalogueService.getWorkflowTemplates({ model_id: modelId })
+      ]);
+
+      const [variantsRes, templatesRes] = results;
+
+      if (variantsRes.status === 'fulfilled') {
+        setVariants(variantsRes.value.data || []);
+      } else {
+        console.error("Failed to fetch variants", variantsRes.reason);
+        // If 404, we assume it's just empty or endpoint mismatch, handle silently for user
+        if (variantsRes.reason?.response?.status !== 404) {
+            setRelatedError("Some related resources could not be loaded.");
+        }
+      }
+
+      if (templatesRes.status === 'fulfilled') {
+        setTemplates(templatesRes.value.data || []);
+      } else {
+        console.error("Failed to fetch templates", templatesRes.reason);
+        if (templatesRes.reason?.response?.status !== 404) {
+            setRelatedError("Some related resources could not be loaded.");
+        }
+      }
+    } catch (err) {
+      console.error("Unexpected error in fetchRelatedData", err);
+    } finally {
+      setLoadingRelated(false);
     }
   }, [modelId]);
 
@@ -124,6 +159,15 @@ const ProcessModelDetailPage = () => {
       <div className="bg-white rounded-xl border shadow-sm p-8 mb-6">
         <ModelDetailsView model={model} />
 
+        {relatedError && (
+            <Alert className="mt-8 bg-amber-50 border-amber-200 text-amber-800">
+                <AlertCircle className="h-4 w-4 text-amber-600" />
+                <AlertDescription className="text-xs font-medium ml-2">
+                    {relatedError} <Button variant="link" className="h-auto p-0 text-xs font-bold" onClick={fetchRelatedData}>Try reloading related resources</Button>
+                </AlertDescription>
+            </Alert>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
           <Card className="border-slate-100">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
@@ -131,7 +175,9 @@ const ProcessModelDetailPage = () => {
               <Layers className="h-4 w-4 text-slate-300" />
             </CardHeader>
             <CardContent>
-              {variants.length > 0 ? (
+              {loadingRelated ? (
+                  <div className="flex justify-center py-4"><Loader2 className="h-4 w-4 animate-spin text-slate-300" /></div>
+              ) : variants.length > 0 ? (
                 <div className="space-y-2">
                   {variants.map(v => (
                     <Link
@@ -145,7 +191,7 @@ const ProcessModelDetailPage = () => {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-slate-400 italic">No organisation variants found.</p>
+                <p className="text-sm text-slate-400 italic">No organisation variants have been created for this Process Model.</p>
               )}
             </CardContent>
           </Card>
@@ -156,7 +202,9 @@ const ProcessModelDetailPage = () => {
               <Layout className="h-4 w-4 text-slate-300" />
             </CardHeader>
             <CardContent>
-              {templates.length > 0 ? (
+              {loadingRelated ? (
+                  <div className="flex justify-center py-4"><Loader2 className="h-4 w-4 animate-spin text-slate-300" /></div>
+              ) : templates.length > 0 ? (
                 <div className="space-y-2">
                   {templates.map(t => (
                     <Link
@@ -170,7 +218,7 @@ const ProcessModelDetailPage = () => {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-slate-400 italic">No workflow templates available.</p>
+                <p className="text-sm text-slate-400 italic">No Workflow Templates are available for this Process Model.</p>
               )}
             </CardContent>
           </Card>
